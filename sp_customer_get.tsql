@@ -1,4 +1,4 @@
-CREATE procedure [dbo].[sp_customer_get](@customerid varchar(10)) as
+CREATE procedure [dbo].[json_sp_customer_get](@customerid varchar(10)) as
 begin
 
 	select  
