@@ -1,0 +1,439 @@
+/***********************************************************************************/
+/*                                                                                 */
+/*      Archivo:                        bv_login_app_conexion.sp 		           */
+/*      Stored procedure:               no aplica                                  */
+/*      Base de Datos:                  cob_bvirtual                               */
+/*      Producto:                       Mi Conexión Bancaribe Movil            	   */
+/*      Disenado por:                   Francisco Galizia                          */
+/*      Fecha de Documentacion:         20/mayo/2021                               */
+/*                                                                      	       */
+/***********************************************************************************/
+/*                                                                                 */
+/*      PROPOSITO                                                                  */
+/*      Login y consultas de un cliente en la APP y WEB					           */ 
+/*      04/02/2022 se incorporo producto bancario para las cuentas - fgalizia      */ 
+/*                                                                                 */
+/***********************************************************************************/
+
+use cob_bvirtual
+GO
+
+ALTER PROCEDURE [dbo].[bv_login_app_conexion](
+	@i_userlogin		varchar(20),
+	@i_password			varchar(500),
+	@i_ip				varchar(255),
+	@i_session_id		varchar(255),
+	@i_servidor			varchar(100),
+	@i_canal			int,			
+	@i_oficina			int
+)
+As
+
+-- datos del cliente
+DECLARE	@w_login				varchar(20),
+		@w_identificacion		varchar(20),
+		@w_cod_usuario			int,
+		@w_ente					int,	
+		@w_ente_mis				int, 
+		@w_nombre				varchar(100),
+		@w_ced_ruc 				varchar(30), 
+		@w_tipo 				varchar(10), 
+		@w_perfil				int, 
+		@w_clave				int, 
+		@w_secuencial_auditoria	int,
+
+-- configuracion del cliente pago movil
+	    @w_cant_trn             tinyint, -- cantidad de transacciones diarias resultado de la consulta.
+	    @w_monto_dia            money, -- monto  disponible para realzar pagos p2p diario resultado de la consulta.	    
+	    @w_monto_trn            money, -- cantidad de transacciones disponibles resultado de la consulta.
+		@w_cant_trn_p2c			tinyint, -- cantidad de transacciones diarias resultado de la consulta P2C.
+		@w_monto_trn_p2c		money, -- monto  disponible para realzar pagos p2p diario resultado de la consulta P2C.	    
+		@w_monto_dia_p2c		money, -- cantidad de transacciones disponibles resultado de la consulta P2C.
+		@w_cant_trn_c2p			tinyint, -- cantidad de transacciones diarias resultado de la consulta P2C.
+		@w_monto_trn_c2p		money, -- monto  disponible para realzar pagos p2p diario resultado de la consulta P2C.	    
+		@w_monto_dia_c2p		money, -- cantidad de transacciones disponibles resultado de la consulta P2C.
+		
+-- cantidad disponibles pago movil	    
+		@w_cupo_dia             money, -- monto  disponible para realzar pagos p2p diario resultado de la consulta	    
+	    @w_cupo_trn             tinyint, -- cantidad de transacciones disponibles resultado de la consulta
+		@w_cupo_dia_p2c         money, -- monto  disponible para realzar pagos p2c diario resultado de la consulta	    
+	    @w_cupo_trn_p2c         tinyint, -- cantidad de transacciones disponibles p2c resultado de la consulta
+		@w_cupo_dia_c2p         money, -- monto  disponible para realzar pagos p2c diario resultado de la consulta	    
+	    @w_cupo_trn_c2p         tinyint, -- cantidad de transacciones disponibles p2c resultado de la consulta
+		
+--parametros del banco pago movil
+  		@w_cant_trn_max         tinyint, -- cantidad de transacciones diarias maximo permitido.
+	    @w_monto_dia_max        money, -- monto del cupo diario maximo permitido,
+	    @w_monto_trn_max        money, -- monto máximo permitido por transacción         
+	    @w_monto_trn_min        money, -- monto mínimo permitido por transacción         	  
+		
+		@w_cant_trn_max_p2c     tinyint, -- cantidad de transacciones diarias maximo permitido.	      
+	    @w_monto_dia_max_p2c    money, -- monto del cupo diario maximo permitido,
+	    @w_monto_trn_max_p2c    money, -- monto máximo permitido por transacción         
+	    @w_monto_trn_min_p2c    money, -- monto mínimo permitido por transacción         	    
+		
+		@w_cant_trn_max_c2p     tinyint, -- cantidad de transacciones diarias maximo permitido.	      
+	    @w_monto_dia_max_c2p    money, -- monto del cupo diario maximo permitido,
+	    @w_monto_trn_max_c2p    money, -- monto máximo permitido por transacción         
+	    @w_monto_trn_min_c2p    money, -- monto mínimo permitido por transacción         	    
+
+--datos del cliente pago movil
+		@w_tipo_doc				char(1),
+		@w_num_doc              varchar(30),
+		@w_tlf                  varchar(64),
+		@w_cta_banco            cuenta,    
+		@w_producto             char(1),   
+		@w_mail_envio           varchar(64),
+		@w_estado               char(1),   
+
+--codigo de retorno para los SP
+		@w_return				int,	
+
+--codigo de tabla para buscar la descripcion del producto bancario 2022-02-04		
+		@w_cod_tabla_cte   smallint,
+		@w_cod_tabla_aho   smallint
+
+--buscar codigo de tabla para la descripcion del producto bancario 2022-02-04		
+SELECT 
+	@w_cod_tabla_cte = codigo
+FROM cobis..cl_tabla
+WHERE tabla = 'bv_desc_prod_bancario_cte'
+
+SELECT 
+	@w_cod_tabla_aho = codigo
+FROM cobis..cl_tabla
+WHERE tabla = 'bv_desc_prod_bancario_aho'		
+
+
+
+
+--CANAL ESTA ACTIVO
+IF EXISTS (SELECT 1 FROM cob_bvirtual..bv_servicio 
+		   WHERE se_servicio = 1 
+		     	 AND se_habilitado = 'H'
+		     	AND se_estado = 'V')
+BEGIN
+
+	--validar usuario y clave
+	BEGIN TRY
+	
+		exec @w_return = webuser_bit..nasp_proceso_inicio_sesion_usuario
+																		@i_user_id = @i_userlogin,
+																		@i_ip = @i_ip,
+																		@i_session_id = @i_session_id,
+																		@i_servidor	= @i_servidor,
+																		@i_canal = @i_canal,
+																		@i_password	= @i_password,
+																		@o_ntv = @w_login out,
+																		@o_identificacion = @w_identificacion out
+																
+		select @w_return as return_login, @w_login as login
+		
+	END TRY
+	BEGIN CATCH	
+		SELECT
+	    ERROR_NUMBER() AS ErrorNumber,
+	    ERROR_STATE() AS ErrorState,
+	    ERROR_SEVERITY() AS ErrorSeverity,
+	    ERROR_PROCEDURE() AS ErrorProcedure,
+	    ERROR_LINE() AS ErrorLine,
+	    ERROR_MESSAGE() AS ErrorMessage
+	END CATCH
+
+END	
+ELSE
+BEGIN
+	--CANAL NO ACTIVO
+	select @w_return = 1888403
+	select @w_return as return_login, @w_login as login
+END
+
+
+
+--datos del cliente
+SELECT 
+	@w_ente=en_ente,
+	@w_ente_mis=en_ente_mis,
+	@w_nombre=en_nombre,
+	@w_ced_ruc=en_ced_ruc,
+	@w_tipo=en_tipo,
+	@w_perfil=es_perfil,
+	@w_cod_usuario = Codigo
+FROM 
+	cob_bvirtual..bv_login with (nolock),
+	cob_bvirtual..bv_ente with (nolock),
+	cob_bvirtual..bv_ente_servicio_perfil with (nolock),
+	webuser_bit..USUARIO with (nolock)
+WHERE 
+	lo_login = @w_login
+	and lo_servicio in (0,1)
+	and en_ente = lo_ente
+	and es_ente = lo_ente
+	and es_servicio in (0,1)
+	and NumTarjetaVirtual = lo_login
+
+select @w_ente as ente, @w_ente_mis as ente_mis, @w_nombre as nombre, @w_ced_ruc as cedula, @w_tipo as tipo, @w_perfil as perfil, @w_cod_usuario as cod_usuario, @w_login as login
+
+
+
+IF @w_return = 0 
+BEGIN
+
+	--ultimo login
+	SELECT top 1 @w_secuencial_auditoria = max(Secuencial) FROM webuser_bit..AUDITORIA with (nolock) WHERE CodUsuario = @w_cod_usuario AND CodOperacion = 36
+
+	SELECT 
+		isNull(max(Fecha), dateadd(yy,-1, getdate())) as fecha_ultimo_login
+	FROM 
+		webuser_bit..AUDITORIA with (nolock)
+	WHERE 
+		CodUsuario = @w_cod_usuario
+		AND CodOperacion = 36 --Conexion de usuario
+		AND Secuencial < @w_secuencial_auditoria
+
+	
+	
+	
+	
+	--perfil del usuario
+	select 
+		pa_status_perfil,
+		pa_intentos_fallidos,
+		pa_pregunta 
+	from 
+		cob_bvirtual..bv_ente_servicio_perfil_afiliacion 
+	where 
+		pa_servicio=1 and 
+		pa_ente = @w_ente
+
+
+	
+	
+	
+	--pregunta de seguridad
+	select 
+		prserv_id_pregunta 
+	from 
+		cob_bvirtual..bv_preguntas_servicios 
+	where 
+		prserv_servicio = 1 and 
+		prserv_ente = @w_ente
+	
+
+	
+	
+	
+	--cuentas del cliente
+	select ep.ep_cuenta,
+		   ep.ep_moneda,
+		   ep.ep_producto,
+		   RTRIM( LTRIM(ep.ep_alias) ) as alias,
+		   (case ep_moneda
+				when 0 then 'BOLIVAR'
+				when 1 then 'DOLAR DE E.E.U.U'
+				when 42 then 'EURO'
+			end) as desc_moneda,
+		   pd.pd_descripcion,
+		   (
+		    select 
+				top 1 valor
+			from cobis..cl_catalogo
+			where 
+				tabla = (case when ep.ep_producto = 3 then @w_cod_tabla_cte else @w_cod_tabla_aho end)
+				and codigo=ep.ep_prod_banc
+			) as ep_nombre_cta, --se busca en la tabla de catalogo la descripcion para ese producto bancarion 2022-02-04
+			ep.ep_prod_banc --se agrego codigo del producto bancario 2022-02-04
+	from cob_bvirtual..bv_ente_servicio_producto ep
+			  INNER JOIN cobis..cl_producto pd
+				   ON ep.ep_producto = pd.pd_producto
+	where   ep.ep_ente = @w_ente
+			and ep.ep_servicio = 1
+			and ep.ep_login = @w_login
+			and ep.ep_producto in (3,4,7,43)
+			and (ep.ep_estado = 'V' or ep.ep_tipo_cta= 'Habilitado')
+			and ep.ep_autorizado = 'S'
+	order by ep.ep_ente, ep.ep_servicio, ep.ep_login, ep.ep_producto, ep.ep_moneda, ep.ep_cuenta
+	
+
+	
+	
+	
+	--transacciones activas para el perfil del cliente
+	SELECT 
+		pt_transaccion,
+		pt_estado 
+	FROM 
+		cob_bvirtual..bv_perfil_transaccion 
+	WHERE 
+		pt_perfil = @w_perfil AND 
+		pt_estado='V'	
+	
+	
+	
+	
+	
+	--catalogo moneda extranjera
+	select 
+		rtrim(c.codigo) as codigo, 
+		convert(varchar(48),c.valor) as valor
+	from cobis..cl_catalogo c, cobis..cl_tabla t
+	where 
+		c.tabla = t.codigo
+		and t.tabla  = 'ta_aperctas_perm'
+		and c.estado = 'V'
+	
+	
+	
+	
+	
+	--parametro para modeneda extranjera
+	select 'Valor' = isnull(pa_smallint,0)
+	from  cobis..cl_parametro , cobis..cl_producto
+	where pa_nemonico = 'APPMD' 
+		  and pa_producto = 'BV'
+		  and pa_producto = pd_abreviatura	
+	
+	
+	
+	
+	--catalogo nombre de iconos nuevos
+	select 
+		rtrim(c.codigo) as codigo, 
+		convert(varchar(48),c.valor) as valor
+	from cobis..cl_catalogo c, cobis..cl_tabla t
+	where 
+		c.tabla = t.codigo
+		and t.tabla  = 'bv_img_app_new'
+		and c.estado = 'V'	
+	
+	
+	
+	
+	--obtener genera clave
+	BEGIN TRY
+		exec cobis..sp_cseqnos
+							@i_tabla = 'bv_log',
+							@o_siguiente = @w_clave out
+
+		select @w_clave as clave
+	END TRY
+	BEGIN CATCH	
+		SELECT
+	    ERROR_NUMBER() AS ErrorNumber,
+	    ERROR_STATE() AS ErrorState,
+	    ERROR_SEVERITY() AS ErrorSeverity,
+	    ERROR_PROCEDURE() AS ErrorProcedure,
+	    ERROR_LINE() AS ErrorLine,
+	    ERROR_MESSAGE() AS ErrorMessage
+	END CATCH
+	
+	
+	
+	--obtener datos de pago movil
+	BEGIN TRY
+	exec @w_return = cob_bvirtual..sp_afiliacion_p2p
+													@s_ssn = 0,
+													@s_user = '',
+													@s_login =  @w_login,
+													@s_term = @i_servidor,
+													@s_servicio = @i_canal,
+													@s_ofi = @i_oficina,
+													@s_lsrv = @i_servidor,
+													@s_date = NULL,
+													@s_srv = @i_servidor,
+													@t_trn = 0,
+													@i_ente = @w_ente,
+													@i_tipo_doc	= '',
+													@i_num_doc = '' ,
+													@i_modo = 'C',
+													@o_cant_trn = @w_cant_trn out,
+													@o_monto_dia = @w_monto_dia out,
+													@o_monto_trn =  @w_monto_trn out,
+													@o_cant_trn_p2c = @w_cant_trn_p2c out,
+													@o_monto_trn_p2c = @w_monto_trn_p2c out,
+													@o_monto_dia_p2c = @w_monto_dia_p2c out,
+													@o_cant_trn_c2p = @w_cant_trn_c2p out,
+													@o_monto_trn_c2p = @w_monto_trn_c2p out,
+													@o_monto_dia_c2p = @w_monto_dia_c2p out,
+													@o_cupo_dia = @w_cupo_dia out,
+													@o_cupo_trn = @w_cupo_trn out,
+													@o_cupo_dia_p2c = @w_cupo_dia_p2c out,
+													@o_cupo_trn_p2c = @w_cupo_trn_p2c out,
+													@o_cupo_dia_c2p = @w_cupo_dia_c2p out,
+													@o_cupo_trn_c2p = @w_cupo_trn_c2p out,
+													@o_cant_trn_max = @w_cant_trn_max out,
+													@o_monto_dia_max = @w_monto_dia_max out,
+													@o_monto_trn_max = @w_monto_trn_max out,
+													@o_monto_trn_min = @w_monto_trn_min out,
+													@o_cant_trn_max_p2c = @w_cant_trn_max_p2c out,
+													@o_monto_dia_max_p2c = @w_monto_dia_max_p2c out,
+													@o_monto_trn_max_p2c = @w_monto_trn_max_p2c out,
+													@o_monto_trn_min_p2c = @w_monto_trn_min_p2c out,
+													@o_cant_trn_max_c2p = @w_cant_trn_max_c2p out,
+													@o_monto_dia_max_c2p = @w_monto_dia_max_c2p out,
+													@o_monto_trn_max_c2p = @w_monto_trn_max_c2p out,
+													@o_monto_trn_min_c2p = @w_monto_trn_min_c2p out,
+													@o_ente = @w_ente out,  
+													@o_tipo_doc = @w_tipo_doc out,	
+													@o_num_doc = @w_num_doc out,  
+													@o_tlf = @w_tlf out,        
+													@o_cta_banco = @w_cta_banco out,  
+													@o_producto = @w_producto out,  
+													@o_mail_envio = @w_mail_envio out,
+													@o_estado = @w_estado out    
+																	
+	select 
+		@w_return as return_pago_movil,
+		@w_cant_trn as cant_trn,             
+		@w_monto_dia as monto_dia,          
+		@w_monto_trn as monto_trn,           
+		@w_cant_trn_p2c	as cant_trn_p2c,		
+		@w_monto_trn_p2c as monto_trn_p2c,		  
+		@w_monto_dia_p2c as monto_dia_p2c,		
+		@w_cant_trn_c2p	as cant_trn_c2p,		
+		@w_monto_trn_c2p as monto_trn_c2p,		  
+		@w_monto_dia_c2p as monto_dia_c2p,		
+
+		@w_cupo_dia as cupo_dia,             
+		@w_cupo_trn as cupo_trn,           
+		@w_cupo_dia_p2c as cupo_dia_p2c,        
+		@w_cupo_trn_p2c as cupo_trn_p2c,        
+		@w_cupo_dia_c2p as cupo_dia_c2p,         
+		@w_cupo_trn_c2p as cupo_trn_c2p,        
+
+		@w_cant_trn_max as cant_trn_max,        
+		@w_monto_dia_max as monto_dia_max,        
+		@w_monto_trn_max as monto_trn_max,       
+		@w_monto_trn_min as monto_trn_min,       
+
+		@w_cant_trn_max_p2c as cant_trn_max_p2c,    
+		@w_monto_dia_max_p2c as monto_dia_max_p2c,   
+		@w_monto_trn_max_p2c as monto_trn_max_p2c,   
+		@w_monto_trn_min_p2c as monto_trn_min_p2c,    
+
+		@w_cant_trn_max_c2p as cant_trn_max_c2p,    
+		@w_monto_dia_max_c2p as monto_dia_max_c2p,    
+		@w_monto_trn_max_c2p as monto_trn_max_c2p,   
+		@w_monto_trn_min_c2p as monto_trn_min_c2p,
+
+		@w_ente as ente,
+		@w_tipo_doc as tipo_doc,
+		@w_num_doc as num_doc,
+		@w_tlf as tlf,
+		@w_cta_banco as cta_banco,
+		@w_producto as producto,
+		@w_mail_envio as mail_envio,
+		@w_estado as estado
+	END TRY
+	BEGIN CATCH	
+		SELECT
+	    ERROR_NUMBER() AS ErrorNumber,
+	    ERROR_STATE() AS ErrorState,
+	    ERROR_SEVERITY() AS ErrorSeverity,
+	    ERROR_PROCEDURE() AS ErrorProcedure,
+	    ERROR_LINE() AS ErrorLine,
+	    ERROR_MESSAGE() AS ErrorMessage
+	END CATCH
+END
+
+GO
