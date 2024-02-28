@@ -1,0 +1,22 @@
+CREATE procedure [dbo].[sp_customer_get](@customerid varchar(10)) as
+begin
+
+	select  
+		c.customerid, c.contactname, c.companyname, c.city, c.country, c.phone,
+		orderid, 
+		orderdate, 
+		shipcountry, 
+		orders.companyname as shipper, 
+		total		
+	from 
+		customers c left join 
+		(select orders.*, shippers.companyname, vw_order_totals.total
+		from orders 
+		inner join shippers on shippers.shipperid = orders.shipvia inner join vw_order_totals on vw_order_totals.orderid = orders.orderid
+		where orders.customerid = @customerid
+		) orders on orders.customerid = c.customerid
+		where c.customerid = @customerid
+	order by c.customerid, orders.orderid
+	for json auto, WITHOUT_ARRAY_WRAPPER	
+	
+end
