@@ -1,0 +1,78 @@
+/*
+ * Returns a resultset with these columns:
+ * status (OK|INVALID)
+ * email
+ * displayname
+ * rolenames
+ * error_code
+ * error_description
+ * 
+ * If status = INVALID then error_code and error_description will return data and all other columns will be NULL,
+ * the opposite if status = OK.
+ * This SP checks if system is available before attempting login, then it validates credentials and tests
+ * if the account is OK if credentials passed.
+ * 
+ * Suggested error codes:
+ * LE001 = invalid credentials
+ * LE002 = account blocked or suspended
+ * LE003 = reset password or password expired
+ * LE004 = system offline, retry later
+ */
+CREATE or ALTER procedure [dbo].[cpp_dblogin2] ( @userlogin varchar(100), @userpassword varchar(100) ) as
+BEGIN
+
+	DECLARE @pwd varchar(200);
+	DECLARE @encodedpwd varchar(200);
+	DECLARE @status int;
+	set @pwd = @userlogin + ':' + @userpassword;
+	
+	SELECT distinct STRING_AGG(r.rolename, ', ') as rolenames INTO #roles FROM testdb.dbo.s_user_role ur INNER JOIN testdb.dbo.s_user u
+	ON u.user_id = ur.user_id
+	INNER JOIN testdb.dbo.s_role r ON r.role_id = ur.role_id
+	WHERE u.userlogin = @userlogin;
+	
+	SET @encodedpwd = (select hashbytes('SHA2_256', @pwd) FOR XML PATH(''), BINARY BASE64);
+	set nocount on
+
+	IF EXISTS(SELECT 1 FROM testdb.dbo.s_system_flags WITH (NOLOCK) WHERE offline = 0)
+		BEGIN
+			IF EXISTS(SELECT 1 FROM testdb.dbo.s_user WITH (NOLOCK) WHERE userlogin = @userlogin AND passwd = @encodedpwd)
+				BEGIN 
+					SELECT @status = status FROM testdb.dbo.s_user WITH (NOLOCK) WHERE userlogin = @userlogin;
+					IF @status = 0
+						BEGIN
+							select 'OK' as status, mail as email, displayname, rolenames, null as error_code, null as error_description 
+							from 
+								testdb.dbo.s_user WITH (NOLOCK), #roles 
+							where
+								userlogin = @userlogin
+						END
+					ELSE
+						BEGIN
+							SELECT 
+								'INVALID' as status, 
+								null as email, 
+								null as displayname, 
+								null as rolenames, 
+								CASE 
+									WHEN @status = 1 THEN 'LE002'
+									WHEN @status = 2 THEN 'LE003'
+									ELSE 'E099'
+								END AS error_code, 
+								CASE 
+									WHEN @status = 1 THEN 'Account blocked'
+									WHEN @status = 2 THEN 'Reset password'
+									ELSE 'Unknown status'
+								END AS error_description 
+						END
+				END
+			ELSE
+				BEGIN
+					select 'INVALID' as status, null as email, null as displayname, null as rolenames, 'LE001' as error_code, 'Invalid credentials' as error_description
+				END
+		END
+	ELSE
+		select 'INVALID' as status, null as email, null as displayname, null as rolenames, 'LE004' as error_code, 'System unavailable, please try later' as error_description
+		
+END
+;
